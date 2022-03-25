@@ -1,8 +1,9 @@
 import { Server, Socket } from "socket.io";
 import { EVENTS } from "./events";
+import { GameRooms } from "./utils";
 
 
-type InitialRoom = {
+export type InitialRoom = {
   roomId: number,
   roomTitle: string,
   isPrivate: boolean,
@@ -12,7 +13,7 @@ type InitialRoom = {
 
 type Player = "X" | "O";
 
-type Room = InitialRoom & {
+export type Room = InitialRoom & {
   ownerSocket: Socket,
   joinerSocket?: Socket | null,
   currentPlayer?: Player
@@ -23,7 +24,7 @@ interface RoomRequest {
   password?: string
 }
 
-type RoomType = "room" | "socket";
+export type RoomType = "room" | "socket";
 
 interface StartGameProps {
   started: boolean,
@@ -36,55 +37,30 @@ interface OnGoingGameProps {
   roomId: string
 }
 
-const roomChannels: Room[] = [];
-
-const filteredRoomChannels = ( rooms: Room[]) =>{
-  const filteredRooms = rooms.map(room =>{
-    const { password, ownerSocket, joinerSocket, currentPlayer, ...rest } = room;
-
-    if ( !rest.isActive ) {
-      return rest;
-    }
-
-    return false;
-  });
-
-  return filteredRooms;
-}
-
-const findRoom = ( roomType: RoomType, item: string | number ) =>{
-  switch(roomType) {
-    case "room":
-      return roomChannels.find(room => room.roomId===item);
-    case "socket":
-      return roomChannels.find(room => room.ownerSocket.id===item);
-  }
-}
-
-const checkAndAddRoom = ( roomType: RoomType, room: Room, socketId: string ) =>{
-  const foundRoom = findRoom(roomType, socketId);
-
-  if ( !foundRoom ) {
-    roomChannels.push(room);
-  }
-}
+const gameRooms = new GameRooms();
 
 const socketServer = (io: Server) =>{
   
   io.on(EVENTS.connection, socket => {
 
-    socket.emit(EVENTS.SERVER.AVAILABLE_ROOMS, filteredRoomChannels(roomChannels));
+    socket.on(EVENTS.CLIENT.SERVE_ROOMS, () =>{
+      socket.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels());
+    })
 
     socket.on(EVENTS.CLIENT.CREATE_ROOM, ( room: InitialRoom ) =>{
       const newRoom: Room = Object.assign(room, { ownerSocket: socket, isActive: false });
 
-      checkAndAddRoom("socket", newRoom, socket.id);
+      gameRooms.checkAndAddRoom("socket", socket.id, newRoom);
 
-      socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, filteredRoomChannels(roomChannels));
+      socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels());
+    })
+
+    socket.on(EVENTS.CLIENT.CANCEL_ROOM, () =>{
+      gameRooms.removeRoom(io, socket);
     })
 
     socket.on(EVENTS.CLIENT.JOIN_ROOM, ( request: RoomRequest ) =>{
-      const room = findRoom("room", request.roomId);
+      const room = gameRooms.findRoom("room", request.roomId);
 
       if ( room ) {
         if ( room.joinerSocket ) {
@@ -108,7 +84,7 @@ const socketServer = (io: Server) =>{
     })
 
     socket.on(EVENTS.CLIENT.START_GAME, ( started: "false" | "true", room: InitialRoom ) =>{
-      const gameRoom = findRoom("room", room.roomId);
+      const gameRoom = gameRooms.findRoom("room", room.roomId);
 
       if ( gameRoom && gameRoom.joinerSocket ) {
         if ( started==="true" ) {
@@ -126,7 +102,7 @@ const socketServer = (io: Server) =>{
           gameRoom.currentPlayer = "X";
 
           io.to(`${room.roomId}`).emit(EVENTS.SERVER.GAME_START, initialGameState);
-          io.emit(EVENTS.SERVER.AVAILABLE_ROOMS, filteredRoomChannels(roomChannels));
+          io.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels());
         }
 
         else {
@@ -137,24 +113,16 @@ const socketServer = (io: Server) =>{
     })
 
     socket.on(EVENTS.CLIENT.ONGOING_GAME, ( { player, move, roomId }: OnGoingGameProps ) =>{
-      const gameRoom = findRoom("room", roomId) as Room;
+      const gameRoom = gameRooms.findRoom("room", roomId) as Room;
 
-      
+    })
+
+    socket.on(EVENTS.CLIENT.EXIT_ONLINE, () =>{
+      socket.disconnect();
     })
 
     socket.on(EVENTS.disconnect, () =>{
-      const assumedUserRoomIndex = roomChannels.findIndex(item => item.ownerSocket.id===socket.id);
-
-      if ( assumedUserRoomIndex!==-1 ) {
-        const room = roomChannels[assumedUserRoomIndex];
-
-        if ( room.joinerSocket ) {
-          io.in(room.joinerSocket.id).socketsLeave(`${room.roomId}`);
-        }
-        roomChannels.splice(assumedUserRoomIndex, 1);
-      }
-      
-      socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, filteredRoomChannels(roomChannels));
+      gameRooms.removeRoom(io, socket);
     })
   })
 
