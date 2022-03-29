@@ -15,8 +15,12 @@ type Player = "X" | "O";
 
 export type Room = InitialRoom & {
   ownerSocket: Socket,
-  joinerSocket?: Socket | null,
-  currentPlayer?: Player
+  nextRound: {
+    [ key: string]: boolean,
+    X: boolean,
+    O: boolean
+  },
+  joinerSocket?: Socket | null
 }
 
 interface RoomRequest {
@@ -24,18 +28,13 @@ interface RoomRequest {
   password?: string
 }
 
-export type RoomType = "room" | "socket";
-
-interface StartGameProps {
-  started: boolean,
-  room: InitialRoom
-}
-
-interface OnGoingGameProps {
-  player: Player,
+interface GameAddMoveProps {
   move: number,
-  roomId: string
+  player: Player,
+  roomId?: number
 }
+
+export type RoomType = "room" | "socket";
 
 const gameRooms = new GameRooms();
 
@@ -43,21 +42,25 @@ const socketServer = (io: Server) =>{
   
   io.on(EVENTS.connection, socket => {
 
-    socket.on(EVENTS.CLIENT.SERVE_ROOMS, () =>{
-      socket.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels());
-    })
+    socket.on(EVENTS.CLIENT.SERVE_ROOMS, () => socket.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels()))
 
     socket.on(EVENTS.CLIENT.CREATE_ROOM, ( room: InitialRoom ) =>{
-      const newRoom: Room = Object.assign(room, { ownerSocket: socket, isActive: false });
+      const newRoom: Room = Object.assign(
+        room,
+        { 
+          ownerSocket: socket, 
+          nextRound: {
+            X: false,
+            O: false
+          },
+          isActive: false });
 
       gameRooms.checkAndAddRoom("socket", socket.id, newRoom);
 
       socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels());
     })
 
-    socket.on(EVENTS.CLIENT.CANCEL_ROOM, () =>{
-      gameRooms.removeRoom(io, socket);
-    })
+    socket.on(EVENTS.CLIENT.CANCEL_ROOM, () => gameRooms.removeRoom(io, socket))
 
     socket.on(EVENTS.CLIENT.JOIN_ROOM, ( request: RoomRequest ) =>{
       const room = gameRooms.findRoom("room", request.roomId);
@@ -67,13 +70,13 @@ const socketServer = (io: Server) =>{
           socket.emit(EVENTS.SERVER.JOIN_REQUEST, { message: "Someone is already joining.", success: false });
         } 
 
-        if ( room.isPrivate && room.password!==request.password ) {
+        else if ( room.isPrivate && room.password!==request.password ) {
           socket.emit(EVENTS.SERVER.JOIN_REQUEST, { message: "Wrong password.", success: false });
         } 
         
         else {
           socket.emit(EVENTS.SERVER.JOIN_REQUEST, { message: "Request sent.", success: true });
-          socket.to(room.ownerSocket.id).emit(EVENTS.SERVER.ROOM_REQUEST, true);
+          io.to(room.ownerSocket.id).emit(EVENTS.SERVER.ROOM_REQUEST, true);
           room.joinerSocket = socket;
         }
       }
@@ -83,15 +86,14 @@ const socketServer = (io: Server) =>{
       }
     })
 
-    socket.on(EVENTS.CLIENT.START_GAME, ( started: "false" | "true", room: InitialRoom ) =>{
-      const gameRoom = gameRooms.findRoom("room", room.roomId);
+    socket.on(EVENTS.CLIENT.START_GAME, ( started: boolean, roomId: number ) =>{
+      const gameRoom = gameRooms.findRoom("room", roomId);
 
       if ( gameRoom && gameRoom.joinerSocket ) {
-        if ( started==="true" ) {
+        if ( started ) {
           const ownerMark = Math.random() < .5? "X" : "O";
           const joinerMark = ownerMark==="X"? "O" : "X";
           const initialGameState = {
-            started,
             ownerMark,
             joinerMark,
             roomId: gameRoom.roomId
@@ -99,9 +101,8 @@ const socketServer = (io: Server) =>{
           gameRoom.ownerSocket.join(`${gameRoom.roomId}`);
           gameRoom.joinerSocket?.join(`${gameRoom.roomId}`);
           gameRoom.isActive = true;
-          gameRoom.currentPlayer = "X";
 
-          io.to(`${room.roomId}`).emit(EVENTS.SERVER.GAME_START, initialGameState);
+          io.to(`${gameRoom.roomId}`).emit(EVENTS.SERVER.GAME_START, initialGameState);
           io.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels());
         }
 
@@ -112,18 +113,29 @@ const socketServer = (io: Server) =>{
       }
     })
 
-    socket.on(EVENTS.CLIENT.ONGOING_GAME, ( { player, move, roomId }: OnGoingGameProps ) =>{
-      const gameRoom = gameRooms.findRoom("room", roomId) as Room;
-
+    socket.on(EVENTS.CLIENT.GAME_ADD_MOVE, ( { move, player, roomId }: GameAddMoveProps ) =>{
+      if ( roomId ) {  
+        socket.to(`${roomId}`).emit(EVENTS.SERVER.GAME_RECEIVE_MOVE, move, player );
+      }
     })
 
-    socket.on(EVENTS.CLIENT.EXIT_ONLINE, () =>{
-      socket.disconnect();
+    socket.on(EVENTS.CLIENT.GAME_REQUEST_NEXT_ROUND, ( player: Player, roomId: number ) =>{
+      const room = gameRooms.findRoom("room", roomId);
+
+      if ( room ) {
+        room.nextRound[player] = true;
+
+        if ( room.nextRound.X && room.nextRound.O ) {
+          io.to(`${ roomId }`).emit(EVENTS.SERVER.GAME_START_NEXT_ROUND);
+          room.nextRound.O = false;
+          room.nextRound.X = false;
+        }
+      }
     })
 
-    socket.on(EVENTS.disconnect, () =>{
-      gameRooms.removeRoom(io, socket);
-    })
+    socket.on(EVENTS.CLIENT.EXIT_ONLINE, () => socket.disconnect())
+
+    socket.on(EVENTS.disconnect, () => gameRooms.removeRoom(io, socket))
   })
 
 }

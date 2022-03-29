@@ -16,7 +16,7 @@ export class GameRooms {
   filteredRoomChannels(): InitialRoom[] {
     const filteredRooms = this.roomChannels.filter(room => !room.isActive );
     const availableRooms = filteredRooms.map(room =>{
-      const { password, ownerSocket, joinerSocket, currentPlayer, ...rest } = room;
+      const { password, ownerSocket, joinerSocket, ...rest } = room;
 
       return rest;
     })
@@ -49,6 +49,7 @@ export class GameRooms {
 
       if ( room.joinerSocket ) {
         io.in(room.joinerSocket.id).socketsLeave(`${room.roomId}`);
+        io.to(room.joinerSocket.id).emit(EVENTS.SERVER.GAME_PLAYER_EXIT);
     }
 
     this.roomChannels.splice(assumedUserRoomIndex, 1);
