@@ -20,7 +20,7 @@ export type Room = InitialRoom & {
     X: boolean,
     O: boolean
   },
-  joinerSocket?: Socket | null
+  joinerSocket: Socket | null
 }
 
 interface RoomRequest {
@@ -53,6 +53,7 @@ const socketServer = (io: Server) =>{
             X: false,
             O: false
           },
+          joinerSocket: null,
           isActive: false });
 
       gameRooms.checkAndAddRoom("socket", socket.id, newRoom);
@@ -60,7 +61,7 @@ const socketServer = (io: Server) =>{
       socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, gameRooms.filteredRoomChannels());
     })
 
-    socket.on(EVENTS.CLIENT.CANCEL_ROOM, () => gameRooms.removeRoom(io, socket))
+    socket.on(EVENTS.CLIENT.CANCEL_ROOM, ( roomId?: number ) => gameRooms.removeRoom(io, socket, roomId))
 
     socket.on(EVENTS.CLIENT.JOIN_ROOM, ( request: RoomRequest ) =>{
       const room = gameRooms.findRoom("room", request.roomId);
@@ -133,7 +134,9 @@ const socketServer = (io: Server) =>{
       }
     })
 
-    socket.on(EVENTS.CLIENT.EXIT_ONLINE, () => socket.disconnect())
+    socket.on(EVENTS.CLIENT.EXIT_ONLINE, ( roomId?: number ) => {
+      gameRooms.removeRoom(io, socket, roomId);
+    })
 
     socket.on(EVENTS.disconnect, () => gameRooms.removeRoom(io, socket))
   })

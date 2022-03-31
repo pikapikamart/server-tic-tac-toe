@@ -41,24 +41,52 @@ export class GameRooms {
     }
   }
 
-  removeRoom( io: Server, socket:Socket ) {
-    const assumedUserRoomIndex = this.roomChannels.findIndex(item => item.ownerSocket.id===socket.id);
+  removeRoom( io: Server, socket:Socket, roomId?: number ) {
+    const assumedRoomIndex = roomId? 
+      this.roomChannels.findIndex(item => item.roomId===roomId) : 
+      this.roomChannels.findIndex(item => item.joinerSocket?.id===socket.id || item.ownerSocket.id===socket.id);
 
-    if ( assumedUserRoomIndex!==-1 ) {
-      const room = this.roomChannels[assumedUserRoomIndex];
+    if ( assumedRoomIndex===-1 ) return;
 
-      if ( room.joinerSocket ) {
-        io.in(room.joinerSocket.id).socketsLeave(`${room.roomId}`);
-        io.to(room.joinerSocket.id).emit(EVENTS.SERVER.GAME_PLAYER_EXIT);
+    const room = this.roomChannels[assumedRoomIndex];
+
+    // no joiner, the owner is the leaver
+    if ( !room.joinerSocket ) {
+      this.roomChannels.splice(assumedRoomIndex, 1);
+      
+      return socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, this.filteredRoomChannels());
     }
 
-    this.roomChannels.splice(assumedUserRoomIndex, 1);
-  }
-  
-    socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, this.filteredRoomChannels());
-  }
+    // currently in middle of game
+    if ( room.isActive ) {
+      const playerId = socket.id===room.joinerSocket.id? room.ownerSocket.id : room.joinerSocket.id;
 
-  checkRoomValidity() {
+      io.in(playerId).socketsLeave(`${room.roomId}`);
+      io.to(playerId).emit(EVENTS.SERVER.GAME_PLAYER_EXIT);
+      this.roomChannels.splice(assumedRoomIndex, 1);
 
+      return socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, this.filteredRoomChannels());
+    }
+
+    // the owner is the leaver but with request to the room
+    if ( room.ownerSocket.id === socket.id ) {
+
+      this.roomChannels.splice(assumedRoomIndex, 1);
+
+      io.to(room.joinerSocket.id).emit(EVENTS.SERVER.JOIN_REQUEST, { 
+        success: false,
+        message: "",
+        exited: true
+       });
+
+      return socket.broadcast.emit(EVENTS.SERVER.AVAILABLE_ROOMS, this.filteredRoomChannels());
+    }
+    
+    // joiner is the leaver of the room with a request to it
+    if ( room.joinerSocket ) {
+      room.joinerSocket = null;
+
+      io.to(room.ownerSocket.id).emit(EVENTS.SERVER.ROOM_REQUEST, false, true);
+    }
   }
 }
