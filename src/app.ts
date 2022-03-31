@@ -16,7 +16,7 @@ const io = new Server(httpServer, {
 // start socket
 socketServer(io);
 
-httpServer.listen(3001, () =>{
+httpServer.listen(process.env.PORT ||  3001, () =>{
   console.log("Starting server at port 3001");
 });
 
