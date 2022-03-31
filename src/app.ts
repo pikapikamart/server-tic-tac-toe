@@ -8,7 +8,7 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: ["http://localhost:3000", "https://frontendmentor-tictactoe.vercel.app/"],
     credentials: true
   }
 });
